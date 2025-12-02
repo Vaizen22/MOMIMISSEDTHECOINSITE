@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MIMTC - Mom, I Missed The Coin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                dark: '#0f172a',
+                accent: '#3b82f6',
+                alert: '#ef4444',
+                success: '#22c55e'
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            }
+          }
+        }
+      }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #0f172a;
+        color: #f8fafc;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+      }
+    </style>
+    <!-- Babel for in-browser JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+      }
+    }
+    </script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect, useRef } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { 
+        Send, User, ShieldCheck, RefreshCw, Lock, X, Globe, 
+        Twitter, ArrowDown, Shield, TrendingUp, Users, Copy, Check 
+      } from 'lucide-react';
+
+      // --- CONFIG & TYPES ---
+      const DEV_PASSWORD = 'solpot';
+      const RESET_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+      const STORAGE_KEY_MSGS = 'mimtc_chat_messages';
+      const STORAGE_KEY_BLOCK = 'mimtc_chat_block';
+      const STORAGE_KEY_CA = 'mimtc_contract_address';
+
+      // --- COMPONENT: ContractDisplay ---
+      const ContractDisplay = () => {
+        const [ca, setCa] = useState('');
+        const [copied, setCopied] = useState(false);
+
+        useEffect(() => {
+          // Load initial
+          setCa(localStorage.getItem(STORAGE_KEY_CA) || '');
+
+          // Listen for storage changes (cross-tab)
+          const handleStorage = () => {
+            setCa(localStorage.getItem(STORAGE_KEY_CA) || '');
+          };
+          window.addEventListener('storage', handleStorage);
+          
+          // Listen for local custom event (same-tab)
+          const handleLocalUpdate = () => {
+            setCa(localStorage.getItem(STORAGE_KEY_CA) || '');
+          };
+          window.addEventListener('mimtc_ca_updated', handleLocalUpdate);
+
+          return () => {
+            window.removeEventListener('storage', handleStorage);
+            window.removeEventListener('mimtc_ca_updated', handleLocalUpdate);
+          };
+        }, []);
+
+        const handleCopy = () => {
+          if (!ca) return;
+          navigator.clipboard.writeText(ca);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        };
+
+        if (!ca) {
+          return (
+            <div className="w-full bg-yellow-500/5 border-y border-yellow-500/20 py-2 text-center backdrop-blur-md">
+              <p className="text-yellow-600 font-mono text-xs md:text-sm font-bold animate-pulse tracking-widest flex items-center justify-center gap-2">
+                <Lock size={12} />
+                CA NOT DEPLOYED YET - STAY TUNED
+              </p>
+            </div>
+          );
+        }
+
+        return (
+          <div 
+            onClick={handleCopy}
+            className="w-full bg-indigo-600/10 border-y border-indigo-500/30 py-3 text-center backdrop-blur-md group cursor-pointer hover:bg-indigo-600/20 transition-colors"
+          >
+            <div className="flex flex-col md:flex-row items-center justify-center gap-2 md:gap-4 max-w-4xl mx-auto px-4">
+              <span className="text-indigo-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1">
+                <ShieldCheck size={14} /> Official CA:
+              </span>
+              <code className="font-mono text-white text-sm md:text-base break-all bg-black/20 px-2 py-1 rounded border border-white/5">
+                {ca}
+              </code>
+              <span className={`text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1 transition-all ${copied ? 'bg-green-500 text-white' : 'bg-indigo-500 text-white opacity-0 group-hover:opacity-100'}`}>
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+                {copied ? 'COPIED' : 'CLICK TO COPY'}
+              </span>
+            </div>
+          </div>
+        );
+      };
+
+      // --- COMPONENT: Chat ---
+      const Chat = () => {
+        const [messages, setMessages] = useState(() => {
+          try {
+            const savedMessages = localStorage.getItem(STORAGE_KEY_MSGS);
+            const savedBlock = localStorage.getItem(STORAGE_KEY_BLOCK);
+            const currentBlock = Math.floor(Date.now() / RESET_INTERVAL_MS).toString();
+            if (savedMessages && savedBlock === currentBlock) {
+              return JSON.parse(savedMessages);
+            }
+          } catch (e) {
+            console.error(e);
+          }
+          return [{
+            id: 'welcome',
+            sender: 'System',
+            text: 'Welcome to the MIMTC Live Chat. Messages synced in real-time.',
+            isDev: false,
+            timestamp: Date.now(),
+          }];
+        });
+
+        const [inputText, setInputText] = useState('');
+        const [username, setUsername] = useState('');
+        const [isDevMode, setIsDevMode] = useState(false);
+        const [showDevLogin, setShowDevLogin] = useState(false);
+        const [devPasswordInput, setDevPasswordInput] = useState('');
+        
+        // Dev: Contract Address Deployment
+        const [caInput, setCaInput] = useState('');
+        const [showCaPanel, setShowCaPanel] = useState(false);
+
+        const calculateTimeLeft = () => {
+          const now = Date.now();
+          const timeSinceLastEpoch = now % RESET_INTERVAL_MS;
+          return Math.floor((RESET_INTERVAL_MS - timeSinceLastEpoch) / 1000);
+        };
+
+        const [timeLeft, setTimeLeft] = useState(calculateTimeLeft());
+        const lastResetIndex = useRef(Math.floor(Date.now() / RESET_INTERVAL_MS));
+        const chatEndRef = useRef(null);
+        const channelRef = useRef(null);
+
+        useEffect(() => {
+          const currentBlock = Math.floor(Date.now() / RESET_INTERVAL_MS).toString();
+          localStorage.setItem(STORAGE_KEY_MSGS, JSON.stringify(messages));
+          localStorage.setItem(STORAGE_KEY_BLOCK, currentBlock);
+        }, [messages]);
+
+        useEffect(() => {
+          channelRef.current = new BroadcastChannel('mimtc_realtime_chat');
+          channelRef.current.onmessage = (event) => {
+            const incomingMsg = event.data;
+            setMessages(prev => {
+              if (prev.some(m => m.id === incomingMsg.id)) return prev;
+              return [...prev, incomingMsg];
+            });
+          };
+          return () => channelRef.current?.close();
+        }, []);
+
+        useEffect(() => {
+          if (chatEndRef.current?.parentElement) {
+            chatEndRef.current.parentElement.scrollTop = chatEndRef.current.parentElement.scrollHeight;
+          }
+        }, [messages]);
+
+        useEffect(() => {
+          const timer = setInterval(() => {
+            setTimeLeft(calculateTimeLeft());
+            const currentResetIndex = Math.floor(Date.now() / RESET_INTERVAL_MS);
+            if (currentResetIndex > lastResetIndex.current) {
+              lastResetIndex.current = currentResetIndex;
+              const resetMsg = {
+                id: Date.now().toString(),
+                sender: 'System',
+                text: 'Chat history cleared. Start a fresh hype cycle!',
+                isDev: false,
+                timestamp: Date.now()
+              };
+              setMessages([resetMsg]);
+            }
+          }, 1000);
+          return () => clearInterval(timer);
+        }, []);
+
+        const handleSend = () => {
+          if (!inputText.trim()) return;
+          const actualSender = isDevMode ? 'DEV TEAM' : (username.trim() || 'Anon');
+          const newMessage = {
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+            sender: actualSender,
+            text: inputText,
+            isDev: isDevMode,
+            timestamp: Date.now(),
+          };
+          setMessages(prev => [...prev, newMessage]);
+          channelRef.current?.postMessage(newMessage);
+          setInputText('');
+        };
+
+        const handleDevLogin = () => {
+          if (devPasswordInput === DEV_PASSWORD) {
+            setIsDevMode(true);
+            setShowDevLogin(false);
+            setDevPasswordInput('');
+            const loginMsg = {
+              id: Date.now().toString(),
+              sender: 'System',
+              text: 'Developer mode activated. Identity verified.',
+              isDev: true,
+              timestamp: Date.now()
+            };
+            setMessages(prev => [...prev, loginMsg]);
+          } else {
+            alert('Access Denied');
+          }
+        };
+
+        const handleDeployCA = () => {
+          if (!caInput.trim()) return;
+          if (confirm('WARNING: You can only set the Contract Address ONCE. Are you sure?')) {
+            localStorage.setItem(STORAGE_KEY_CA, caInput.trim());
+            window.dispatchEvent(new Event('mimtc_ca_updated'));
+            
+            const announceMsg = {
+              id: Date.now().toString(),
+              sender: 'DEV TEAM',
+              text: '🚨 CONTRACT DEPLOYED! SEE HEADER/FOOTER 🚨',
+              isDev: true,
+              timestamp: Date.now()
+            };
+            setMessages(prev => [...prev, announceMsg]);
+            channelRef.current?.postMessage(announceMsg);
+            
+            setShowCaPanel(false);
+            setCaInput('');
+          }
+        };
+
+        const handleResetCA = () => {
+          if(confirm('RESET CA: This will clear the contract address from storage. Are you sure?')) {
+            localStorage.removeItem(STORAGE_KEY_CA);
+            window.dispatchEvent(new Event('mimtc_ca_updated'));
+            const announceMsg = {
+              id: Date.now().toString(),
+              sender: 'DEV TEAM',
+              text: '⚠ CONTRACT ADDRESS HAS BEEN RESET FOR TESTING',
+              isDev: true,
+              timestamp: Date.now()
+            };
+            setMessages(prev => [...prev, announceMsg]);
+            channelRef.current?.postMessage(announceMsg);
+          }
+        }
+
+        const formatTime = (seconds) => {
+          const m = Math.floor(seconds / 60);
+          const s = seconds % 60;
+          return `${m}:${s < 10 ? '0' : ''}${s}`;
+        };
+
+        return (
+          <div className="flex flex-col h-[600px] w-full max-w-2xl bg-slate-800 rounded-xl overflow-hidden border border-slate-700 shadow-2xl relative">
+            {/* Chat Header */}
+            <div className="bg-slate-900 p-4 border-b border-slate-700 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                   <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                   <div className="absolute inset-0 bg-green-500 rounded-full animate-ping opacity-75"></div>
+                </div>
+                <div>
+                  <h3 className="font-bold text-white flex items-center gap-2">
+                    Community Live Chat
+                    {isDevMode && <span className="text-[10px] bg-indigo-500 px-1 rounded text-white">DEV ACCESS</span>}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 flex items-center gap-1"><Globe size={10}/> Global Sync Active</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                 {isDevMode && (
+                   <button 
+                    onClick={() => setShowCaPanel(!showCaPanel)}
+                    className="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded"
+                   >
+                     DEPLOY CA
+                   </button>
+                 )}
+                 <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                  <RefreshCw size={12} />
+                  <span>{formatTime(timeLeft)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* CA Deployment Panel (Dev Only) */}
+            {showCaPanel && isDevMode && (
+              <div className="bg-slate-950 p-4 border-b border-red-500/50 animation-in slide-in-from-top-2">
+                <h4 className="text-red-500 font-bold text-xs mb-2 uppercase">⚠ Deploy Contract Address (One-Time Action)</h4>
+                <div className="flex gap-2 mb-2">
+                  <input 
+                    type="text" 
+                    value={caInput}
+                    onChange={(e) => setCaInput(e.target.value)}
+                    placeholder="Paste Solana CA here..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1 text-sm text-white focus:border-red-500 outline-none"
+                  />
+                  <button 
+                    onClick={handleDeployCA}
+                    disabled={!caInput}
+                    className="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 rounded disabled:opacity-50"
+                  >
+                    PUBLISH
+                  </button>
+                </div>
+                <div className="text-right">
+                  <button onClick={handleResetCA} className="text-[10px] text-slate-500 hover:text-white underline">
+                    [TESTING ONLY] RESET CA
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-800/50 scrollbar-hide">
+              {messages.length === 0 && (
+                <div className="text-center text-slate-500 mt-20 italic">
+                  Chat cleared. Be the first to say something!
+                </div>
+              )}
+              {messages.map((msg) => (
+                <div key={msg.id} className={`flex flex-col ${msg.isDev ? 'items-end' : 'items-start'}`}>
+                  <div className={`flex items-center gap-2 mb-1 ${msg.isDev ? 'flex-row-reverse' : ''}`}>
+                    <span className={`text-xs font-bold ${msg.isDev ? 'text-yellow-400' : 'text-slate-400'}`}>
+                      {msg.sender}
+                    </span>
+                    {msg.isDev && (
+                      <span className="bg-yellow-500/20 text-yellow-500 text-[10px] px-1.5 py-0.5 rounded border border-yellow-500/50 font-bold tracking-wider">
+                        DEV
+                      </span>
+                    )}
+                  </div>
+                  <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm break-words ${msg.isDev ? 'bg-indigo-600 text-white rounded-tr-none shadow-lg' : 'bg-slate-700 text-slate-100 rounded-tl-none'}`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Input */}
+            <div className="p-4 bg-slate-900 border-t border-slate-700 space-y-3">
+              {!isDevMode && (
+                 <div className="flex items-center gap-2">
+                    <User size={16} className="text-slate-500" />
+                    <input 
+                      type="text" 
+                      placeholder="Set Username (Optional)..." 
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="bg-transparent text-sm text-slate-300 focus:outline-none w-full placeholder:text-slate-600"
+                      maxLength={15}
+                    />
+                 </div>
+              )}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                  placeholder={isDevMode ? "Broadcast message as Developer..." : "Type your message..."}
+                  className={`flex-1 bg-slate-800 border ${isDevMode ? 'border-indigo-500/50' : 'border-slate-700'} text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all`}
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={!inputText.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white p-3 rounded-lg transition-colors shadow-lg"
+                >
+                  <Send size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Dev Login Trigger */}
+            <button 
+              onClick={() => setShowDevLogin(true)}
+              className="absolute bottom-2 right-2 opacity-10 hover:opacity-100 transition-opacity p-2 text-white z-10"
+            >
+              <Lock size={12} />
+            </button>
+
+            {/* Dev Login Modal */}
+            {showDevLogin && !isDevMode && (
+              <div className="absolute inset-0 bg-slate-900/95 flex items-center justify-center z-50 backdrop-blur-sm p-6">
+                <div className="w-full max-w-sm space-y-4 bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-2xl">
+                  <div className="flex justify-between items-center text-white mb-2">
+                    <h4 className="font-bold flex items-center gap-2"><ShieldCheck size={18} className="text-yellow-500"/> Developer Access</h4>
+                    <button onClick={() => setShowDevLogin(false)} className="text-slate-400 hover:text-white"><X size={18} /></button>
+                  </div>
+                  <input 
+                    type="password"
+                    placeholder="Enter Access Key"
+                    value={devPasswordInput}
+                    onChange={(e) => setDevPasswordInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+                  />
+                  <button 
+                    onClick={handleDevLogin}
+                    className="w-full bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-3 rounded transition-colors"
+                  >
+                    Verify Identity
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // --- MAIN APP COMPONENT ---
+      const App = () => {
+        useEffect(() => {
+          if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+          window.scrollTo(0, 0);
+          setTimeout(() => window.scrollTo(0, 0), 10);
+        }, []);
+
+        return (
+          <div className="min-h-screen bg-[#020617] text-slate-200 overflow-x-hidden selection:bg-indigo-500 selection:text-white pb-20">
+            
+            {/* Navbar */}
+            <nav className="fixed top-0 w-full z-50 bg-[#020617]/90 backdrop-blur-md border-b border-white/5">
+              <ContractDisplay /> {/* CA Display Top */}
+              <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+                <div className="font-black text-2xl tracking-tighter text-white">
+                  $MIMTC
+                </div>
+                <a href="#chat" className="bg-white text-black px-4 py-2 rounded-full font-bold text-xs hover:bg-slate-200 transition-colors">
+                  Join Movement
+                </a>
+              </div>
+            </nav>
+
+            {/* Hero Section */}
+            <section className="relative pt-40 pb-20 px-6 min-h-screen flex flex-col items-center justify-center">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#020617] to-[#020617] -z-10"></div>
+              
+              <div className="max-w-4xl mx-auto text-center space-y-8">
+                <div className="inline-block animate-bounce mb-4">
+                   <span className="bg-red-600 text-white px-3 py-1 rounded text-xs font-bold tracking-widest uppercase">
+                     Don't Panic
+                   </span>
+                </div>
+                
+                <h1 className="text-5xl md:text-7xl font-black text-white tracking-tight leading-tight">
+                  MOM, I MISSED <br/>
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">
+                    THE COIN
+                  </span>
+                </h1>
+                
+                <div className="flex justify-center py-8">
+                  <div className="relative group cursor-pointer transform hover:scale-[1.01] transition-transform duration-500">
+                     <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
+                     <div className="relative rounded-lg overflow-hidden border border-slate-700/50 bg-slate-900 shadow-2xl">
+                       <img 
+                          src="poster.png"
+                          alt="MIMTC Official Poster" 
+                          className="w-full max-w-xl mx-auto object-cover md:max-w-2xl h-auto"
+                        />
+                     </div>
+                  </div>
+                </div>
+
+                <p className="text-lg md:text-xl text-slate-400 max-w-2xl mx-auto leading-relaxed">
+                   It’s not the plane you missed — it’s the coin. But you won’t miss the next one.
+                   Turns every miss into an opportunity.
+                </p>
+              </div>
+              
+              <div className="absolute bottom-10 animate-pulse-slow">
+                <ArrowDown className="text-slate-600" size={32} />
+              </div>
+            </section>
+
+            <ContractDisplay /> {/* CA Display Middle */}
+
+            {/* The Story / About */}
+            <section id="about" className="py-24 bg-slate-900/50 border-y border-white/5">
+              <div className="max-w-5xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
+                <div className="space-y-6">
+                  <h2 className="text-3xl font-bold text-white">The Story Behind MIMTC</h2>
+                  <p className="text-slate-400 leading-relaxed">
+                    Everyone has felt that moment of regret: <span className="text-indigo-300 italic">“I should’ve entered earlier… now it’s too late.”</span>
+                  </p>
+                  <p className="text-slate-400 leading-relaxed">
+                    The iconic image of the panicked kid captures this feeling perfectly. But MIMTC flips this regret into opportunity. You may have missed a coin, but you won’t miss <strong>the</strong> coin.
+                  </p>
+                  <div className="pt-4 grid grid-cols-2 gap-4">
+                    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800">
+                      <Shield className="text-indigo-500 mb-2" size={24} />
+                      <h4 className="font-bold text-white mb-1">Safe Project</h4>
+                      <p className="text-xs text-slate-500">No rug, no hidden traps. Fully visible team.</p>
+                    </div>
+                    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800">
+                      <TrendingUp className="text-green-500 mb-2" size={24} />
+                      <h4 className="font-bold text-white mb-1">Real Objectives</h4>
+                      <p className="text-xs text-slate-500">Building a strong, hype-driven memecoin.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="relative">
+                   <div className="absolute -inset-4 bg-indigo-500/10 rounded-full blur-3xl"></div>
+                   <div className="relative bg-slate-950 border border-slate-800 p-4 rounded-2xl overflow-hidden shadow-2xl">
+                      <img 
+                        src="poster.png"
+                        alt="MIMTC Vision"
+                        className="w-full h-auto rounded-lg opacity-90 hover:opacity-100 transition-opacity"
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/90 to-transparent pt-20">
+                          <p className="text-white font-bold text-lg">$MIMTC Vision</p>
+                          <p className="text-slate-300 text-xs">Community First. Hype Driven.</p>
+                      </div>
+                   </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Dev Team */}
+            <section id="team" className="py-24 px-6">
+              <div className="max-w-4xl mx-auto">
+                <div className="text-center mb-16 space-y-4">
+                  <h2 className="text-3xl font-bold text-white">Visible Developers</h2>
+                  <p className="text-slate-400">No anonymity. No hiding. The devs are publicly active on X.</p>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-8">
+                  <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl hover:border-indigo-500/50 transition-all group">
+                    <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-6 text-2xl group-hover:bg-indigo-600 transition-colors">
+                      🎨
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-1">Funity</h3>
+                    <p className="text-xs text-indigo-400 font-mono mb-4">Creative Director</p>
+                    <p className="text-slate-400 text-sm mb-6">Creative direction, presence, communication, and project evolution.</p>
+                    <a href="https://x.com/funity66" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm text-white hover:text-indigo-400 transition-colors">
+                      <Twitter size={16} /> @funity66
+                    </a>
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl hover:border-indigo-500/50 transition-all group">
+                    <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-6 text-2xl group-hover:bg-indigo-600 transition-colors">
+                      🧠
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-1">Tomzo</h3>
+                    <p className="text-xs text-indigo-400 font-mono mb-4">Strategy Lead</p>
+                    <p className="text-slate-400 text-sm mb-6">Strategy, vision, management, and communication support.</p>
+                    <a href="https://x.com/KryptoTomzo" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm text-white hover:text-indigo-400 transition-colors">
+                      <Twitter size={16} /> @KryptoTomzo
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Live Chat Section */}
+            <section id="chat" className="py-24 bg-[#050b1e] border-t border-white/5">
+              <div className="max-w-6xl mx-auto px-6 flex flex-col items-center">
+                <div className="text-center mb-12 max-w-2xl">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-500/10 text-green-400 text-xs font-bold mb-4 border border-green-500/20">
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    LIVE NOW
+                  </div>
+                  <h2 className="text-3xl font-bold text-white mb-4">The MIMTC Community Hub</h2>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    A simple, human, welcoming way to onboard new investors. 
+                    The chat auto-resets every 10 minutes to keep it clean and hype-focused.
+                    No login required.
+                  </p>
+                </div>
+
+                <Chat />
+
+                <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6 text-center max-w-4xl w-full">
+                   <div className="p-4 rounded border border-slate-800/50 bg-slate-900/30">
+                     <Users className="mx-auto mb-2 text-slate-500" size={20}/>
+                     <p className="text-slate-300 text-xs font-medium">Open to Everyone</p>
+                   </div>
+                   <div className="p-4 rounded border border-slate-800/50 bg-slate-900/30">
+                     <TrendingUp className="mx-auto mb-2 text-slate-500" size={20}/>
+                     <p className="text-slate-300 text-xs font-medium">Real-time Hype</p>
+                   </div>
+                   <div className="p-4 rounded border border-slate-800/50 bg-slate-900/30">
+                     <Shield className="mx-auto mb-2 text-slate-500" size={20}/>
+                     <p className="text-slate-300 text-xs font-medium">Verified Devs</p>
+                   </div>
+                </div>
+              </div>
+            </section>
+
+            <ContractDisplay /> {/* CA Display Bottom */}
+
+            {/* Footer */}
+            <footer className="py-12 border-t border-slate-800 bg-[#020617] text-center">
+              <p className="text-slate-500 text-sm">
+                © {new Date().getFullYear()} MIMTC. Not financial advice. Just a coin you missed (until now).
+              </p>
+            </footer>
+          </div>
+        );
+      };
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
